@@ -1,0 +1,145 @@
+---
+title: Effect of atmospheric phenomena on population and properties
+  in the United States
+author: "Andrea Giugno"
+date: "February 14, 2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Synopsis
+
+We analyse the storm database of the National Oceanic and Atmospheric Administration (NOAA), which contains data related to major weather events taking place in the USA during the years 1950-2011. The goal is to figure out what kind of events raise the biggest concerns on the safety of population and properties.
+Our analysis shows that tornados and floods are the worst kind of events in terms of population risk and economic damage, respectively. 
+
+## Data processing
+First, we include the needed libraries.
+```{r, message = FALSE}
+library("knitr")
+library("dplyr")
+library("lubridate")
+library("ggplot2")
+```
+
+Then we load the data in a dataframe.
+```{r, cache = TRUE}
+stormDf <- read.csv("repdata_data_StormData.csv.bz2")
+```
+
+The dates are in the wrong format, so they are fixed by the ```as.Date()``` function. Moreover, it is useful to single out the year in which the event occurred for reasons that will be clear in a second.
+```{r}
+stormDf$BGN_DATE <- as.Date(stormDf$BGN_DATE, format = "%m/%d/%Y %H:%M:%S")
+stormDf$YEAR <- year(stormDf$BGN_DATE)
+```
+
+We are now ready to select the relevant fields from the entire dataset.
+```{r}
+relevStormDf <- select(stormDf, YEAR, EVTYPE, FATALITIES, INJURIES, PROPDMG, PROPDMGEXP, CROPDMG, CROPDMGEXP)
+```
+
+The barplot below shows that the distribution of collected data is very skewed. In particular, the collection of informations on atmospheric events before the '90s is scarce, and this can spoil the analysis. Therefore, we select only events occurring after the year 1990 and work with them.
+```{r, fig.align = "center"}
+barplot(table(relevStormDf$YEAR), 
+        main = "Number of weather events per year", 
+        xlab = "Year", ylab = "Frequency", 
+        col = "red")
+
+relevStormDf <- filter(relevStormDf, relevStormDf$YEAR > 1990)
+```
+
+## Data cleaning
+The ```EVTYPE``` field has to be cleaned, as its levels contain trailing white spaces, typos, arbitrary use of plural, etc. An extensive use of regex is made.
+```{r}
+relevStormDf$EVTYPE <- as.factor(toupper(relevStormDf$EVTYPE))
+relevStormDf$EVTYPE <- as.factor(trimws(relevStormDf$EVTYPE))
+relevStormDf$EVTYPE <- as.factor(gsub("\\ {2, }", "\\ ", relevStormDf$EVTYPE))
+relevStormDf$EVTYPE <- as.factor(gsub("(\\ *)[/&\\-](\\ *)", "/", relevStormDf$EVTYPE))
+relevStormDf$EVTYPE <- as.factor(gsub("[/\\.]$", "", relevStormDf$EVTYPE))
+relevStormDf$EVTYPE <- as.factor(gsub("TIDES", "TIDE", relevStormDf$EVTYPE))
+relevStormDf$EVTYPE <- as.factor(gsub("FLOOODING", "FLOODING", relevStormDf$EVTYPE))
+relevStormDf$EVTYPE <- as.factor(gsub("CLOUDS", "CLOUD", relevStormDf$EVTYPE))
+relevStormDf$EVTYPE <- as.factor(gsub("HVY", "HEAVY", relevStormDf$EVTYPE))
+relevStormDf$EVTYPE <- as.factor(gsub("TORNDAO", "TORNADO", relevStormDf$EVTYPE))
+relevStormDf$EVTYPE <- as.factor(gsub("TORNADO(E*)S", "TORNADO", relevStormDf$EVTYPE))
+relevStormDf$EVTYPE <- as.factor(gsub("W(I*)ND(S*)", "WIND", relevStormDf$EVTYPE))
+```
+
+Next, we have to take care of the exponents in the columns ```PROPDMGEXP``` and ```CROPDMGEXP```. Sometimes they are labeled with the letters "H" (hundreds), "K" (thousands), "M" (millions) and "B" (billions) instead of the corresponding digits of the exponent in scientific notation. We quickly fix this issue as follows.
+```{r, warning = FALSE}
+relevStormDf$PROPDMGEXP <- gsub("[Hh]", "2", relevStormDf$PROPDMGEXP)
+relevStormDf$PROPDMGEXP <- gsub("[Kk]", "3", relevStormDf$PROPDMGEXP)
+relevStormDf$PROPDMGEXP <- gsub("[Mm]", "6", relevStormDf$PROPDMGEXP)
+relevStormDf$PROPDMGEXP <- gsub("[Bb]", "9", relevStormDf$PROPDMGEXP)
+relevStormDf$PROPDMGEXP <- gsub("\\+|\\-|\\?\\ ", "0",  relevStormDf$PROPDMGEXP)
+relevStormDf$PROPDMGEXP <- as.numeric(relevStormDf$PROPDMGEXP)
+relevStormDf$PROPDMGEXP[is.na(relevStormDf$PROPDMGEXP)] <- 0
+
+relevStormDf$CROPDMGEXP <- gsub("[Hh]", "2", relevStormDf$CROPDMGEXP)
+relevStormDf$CROPDMGEXP <- gsub("[Kk]", "3", relevStormDf$CROPDMGEXP)
+relevStormDf$CROPDMGEXP <- gsub("[Mm]", "6", relevStormDf$CROPDMGEXP)
+relevStormDf$CROPDMGEXP <- gsub("[Bb]", "9", relevStormDf$CROPDMGEXP)
+relevStormDf$CROPDMGEXP <- gsub("\\+|\\-|\\?\\ ", "0", relevStormDf$CROPDMGEXP)
+relevStormDf$CROPDMGEXP <- as.numeric(relevStormDf$CROPDMGEXP)
+relevStormDf$CROPDMGEXP[is.na(relevStormDf$CROPDMGEXP)] <- 0
+```
+
+We then feature-engineer the ```PROPDMG``` and ```CROPDMG``` fields.
+```{r}
+relevStormDf <- mutate(relevStormDf, PROPDMG = PROPDMG * (10 ^ PROPDMGEXP), CROPDMG = CROPDMG * (10 ^ CROPDMGEXP)) 
+relevStormDf <- select(relevStormDf, -c(PROPDMGEXP, CROPDMGEXP))
+```
+
+## 1. Which type of events are the most harmful to population health?
+In order to estimate how bad weather impacts the safety of the population, we sum the number of registered injuries and fatalities. We then take their total: this is the number of people affected by harmful atmospheric events. 
+```{r}
+casualties <- summarise(group_by(relevStormDf, EVTYPE), 
+                     totalFATALITIES = sum(FATALITIES), 
+                     totalINJURIES = sum(INJURIES))
+casualties <- mutate(casualties, IMPACT = totalFATALITIES + totalINJURIES)
+
+mostDangerousEvents <- arrange(casualties, desc(IMPACT))[1:10, c(1, 4)]
+mostDangerousEvents
+```
+
+Let us plot the result flipping the axes for a better readability of ```EVTYPE```.
+```{r}
+g <- ggplot(data = mostDangerousEvents, aes(EVTYPE))
+g <- g + geom_bar(aes(weight=IMPACT),
+                  colour = "black", fill = "green")
+g <- g + coord_flip()
+g <- g + labs(title = "Total amount of people injured or killed by weather events",
+              x = "Event Type", y = "Impacted people")
+print(g)
+```
+
+## 2. Which type of events have the greatest economic consequences?
+We repeat the same procedure to evaluate the economic damage to properties and crops. We rescale the total economic impact by a factor 10^9, in order to express the result in billions of US dollars (USD).
+```{r}
+ECON_DATA <- summarise(group_by(relevStormDf, EVTYPE), 
+                         TOTAL_PROPDMG = sum(PROPDMG), 
+                         TOTAL_CROPDMG = sum(CROPDMG))
+ECON_DATA <- mutate(ECON_DATA, ECON_IMPACT = (TOTAL_PROPDMG + TOTAL_CROPDMG)/10e+9)
+
+worstEconomicLosses <- arrange(ECON_DATA, desc(ECON_IMPACT))[1:10, c(1,4)]
+worstEconomicLosses
+```
+
+Let us visualise these findings with another barplot.
+```{r}
+g <- ggplot(data = worstEconomicLosses, aes(EVTYPE))
+g <- g + geom_bar(aes(weight=ECON_IMPACT),
+                  colour = "black", fill = "blue")
+g <- g + coord_flip()
+g <- g + labs(title = "Total economic loss due to bad weather events",
+              x = "Event Type", y = "Total amount of Property and Crop Damage in Billion USD")
+print(g)
+```
+
+## Results
+
+According to our analysis, tornados are by far the most dangerous kind of weather events for the population, followed by excessive heat and floods.
+
+On the other hand, floods cause the most extensive damage to properties, together with hurricanes and storm surges.
