@@ -16,7 +16,12 @@ relevStormDf <- select(stormDf, YEAR, EVTYPE, FATALITIES, INJURIES, PROPDMG, PRO
 # PREPROCESS THE DATA
 
 #There are not so many events prior to the 90s
-barplot(table(relevStormDf$YEAR))
+png("Figures/cut_years.png", height = 480, width = 480, units = "px")
+barplot(table(relevStormDf$YEAR), 
+        main = "Number of weather events per year", 
+        xlab = "Year", ylab = "Frequency", 
+        col = "red")
+dev.off()
 
 relevStormDf <- filter(relevStormDf, relevStormDf$YEAR > 1990)
 
@@ -78,3 +83,22 @@ ggsave("Figures/impact.png", plot=g, device = "png",
 
 #######
 # ECONOMICAL DAMAGE
+
+ECON_DATA <- summarise(group_by(relevStormDf, EVTYPE), 
+                         TOTAL_PROPDMG = sum(PROPDMG), 
+                         TOTAL_CROPDMG = sum(CROPDMG))
+ECON_DATA <- mutate(ECON_DATA, ECON_IMPACT = (TOTAL_PROPDMG + TOTAL_CROPDMG)/10e+9)
+
+worstEconomicLosses <- arrange(ECON_DATA, desc(ECON_IMPACT))[1:10, c(1,4)]
+
+# Make barplot of IMPACT
+g <- ggplot(data = worstEconomicLosses, aes(EVTYPE))
+g <- g + geom_bar(aes(weight=ECON_IMPACT),
+                  colour = "black", fill = "blue")
+g <- g + coord_flip()
+g <- g + labs(title = "Total economic loss due to bad weather events",
+              x = "Event Type", y = "Total amount of Property and Crop Damage in Billion USD")
+# print(g)
+
+ggsave("Figures/loss.png", plot=g, device = "png",
+       height = 20, width = 20, units = "cm")
